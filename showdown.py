@@ -31,7 +31,7 @@ SETTINGS_PATH = os.path.join(SCRIPT_DIR, "settings.json")
 RIBBONS_PATH = os.path.join(SCRIPT_DIR, "ribbons.json")
 
 # Default remote ribbons URL (placeholder). Replace with your own hosted JSON if desired.
-DEFAULT_RIBBON_URL = "https://raw.githubusercontent.com/SilverTheShinyEevee/PokeSetSmith/56c878296e714b7bc317a94822a0d3608e4596ee/ribbons.json"
+DEFAULT_RIBBON_URL = "https://raw.githubusercontent.com/SilverTheShinyEevee/PokeSetSmith/main/ribbons.json"
 # Showdown data endpoints (for base stats, moves, abilities, items)
 SHOWDOWN_POKEDEX_URL = "https://play.pokemonshowdown.com/data/pokedex.json"
 SHOWDOWN_MOVES_URL = "https://play.pokemonshowdown.com/data/moves.json"
@@ -82,8 +82,9 @@ def save_json(path: str, data) -> None:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 def load_json(path: str):
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    with open(path, "r", encoding="utf-8-sig") as f:
+        json_string = f.read()
+        return json.loads(json_string)
 
 def ask(prompt: str, optional: bool=False, default: Optional[str]=None) -> str:
     t = f"{prompt}{' (optional)' if optional else ''}"
@@ -153,7 +154,7 @@ def download_json_to(path: str, url: str, timeout: int=8) -> bool:
             return True
         else:
             return False
-    except Exception:
+    except Exception as e:
         return False
 
 def load_ribbons(settings: Dict) -> Dict[str, List[str]]:
@@ -165,7 +166,7 @@ def load_ribbons(settings: Dict) -> Dict[str, List[str]]:
         try:
             data = load_json(RIBBONS_PATH)
             return data
-        except Exception:
+        except Exception as e:
             print("Warning: existing ribbons.json is invalid; falling back to download or built-in.")
     # try download if allowed
     if not settings.get("offline_mode", False) and settings.get("check_for_ribbon_updates_on_startup", True):
@@ -176,7 +177,7 @@ def load_ribbons(settings: Dict) -> Dict[str, List[str]]:
             print("✅ Successfully downloaded ribbons.json from online source.")
             try:
                 return load_json(RIBBONS_PATH)
-            except Exception:
+            except Exception as e:
                 print("Warning: downloaded ribbons.json is invalid. Using built-in fallback.")
         else:
             print("⚠️ Unable to download ribbons.json — using built-in fallback.")
