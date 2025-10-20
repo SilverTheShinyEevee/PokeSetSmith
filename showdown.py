@@ -31,7 +31,7 @@ SETTINGS_PATH = os.path.join(SCRIPT_DIR, "settings.json")
 RIBBONS_PATH = os.path.join(SCRIPT_DIR, "ribbons.json")
 
 # Default remote ribbons URL (placeholder). Replace with your own hosted JSON if desired.
-DEFAULT_RIBBON_URL = "https://raw.githubusercontent.com/SilverTheShinyEevee/PokeSetSmith/56c878296e714b7bc317a94822a0d3608e4596ee/ribbons.json"
+DEFAULT_RIBBON_URL = "https://raw.githubusercontent.com/SilverTheShinyEevee/PokeSetSmith/main/ribbons.json"
 # Showdown data endpoints (for base stats, moves, abilities, items)
 SHOWDOWN_POKEDEX_URL = "https://play.pokemonshowdown.com/data/pokedex.json"
 SHOWDOWN_MOVES_URL = "https://play.pokemonshowdown.com/data/moves.json"
