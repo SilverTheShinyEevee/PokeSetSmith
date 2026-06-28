@@ -1,7 +1,7 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 generate_showdown_set.py
-Single-file Pokémon Showdown set generator (updated).
+Single-file Pokémon Showdown / Pokémon Champions set generator (updated).
 Includes:
 - EV/IV reverse calculation from observed stats
 - Autocorrect (prompt/silent/off)
@@ -9,7 +9,13 @@ Includes:
 - Persisted settings.json and in-script settings menu
 - OT + Trainer ID capture
 - Safe hashed profanity filter (no visible slurs)
-- Transferable-game list and generation-specific fields (contest, affection, friendship, memories, marks)
+- Transferable-game list (covering every official Pokémon game/peripheral/service)
+  and generation-specific fields (contest, affection, friendship, memories, marks)
+- Output format choice: Pokémon Showdown export OR Pokémon Champions export
+- Showdown <-> Champions set converter
+- Current game is asked for FIRST (right after species/base stats) so every
+  generation-gated question (Tera Type, Dynamax/Gigantamax, Contest stats,
+  Affection/Memory, Friendship, Marks) only gets asked when relevant.
 """
 
 from __future__ import annotations
@@ -76,6 +82,28 @@ NATURE_EFFECTS = {
 }
 STAT_KEYS = ['hp','atk','def','spa','spd','spe']
 STAT_DISPLAY = {'hp':'HP','atk':'Atk','def':'Def','spa':'SpA','spd':'SpD','spe':'Spe'}
+
+# ---------- Pokémon Champions constants ----------
+# Champions removes IVs entirely (everything is effectively a perfect 31)
+# and replaces the 252-max / 510-total EV system with a flat
+# "Stat Points" system: up to 66 Stat Points per stat, no shared total cap
+# (per stat only). These constants drive the conversion math below.
+CHAMPIONS_FIXED_IV = 31
+CHAMPIONS_MAX_STAT_POINTS = 66
+SHOWDOWN_MAX_EV_PER_STAT = 252
+
+def ev_to_stat_points(ev: int) -> int:
+    """Convert a Showdown-style EV (0-252) into a Champions Stat Point (0-66)."""
+    ev = max(0, min(SHOWDOWN_MAX_EV_PER_STAT, ev))
+    sp = round(ev / SHOWDOWN_MAX_EV_PER_STAT * CHAMPIONS_MAX_STAT_POINTS)
+    return max(0, min(CHAMPIONS_MAX_STAT_POINTS, sp))
+
+def stat_points_to_ev(sp: int) -> int:
+    """Convert a Champions Stat Point (0-66) back into a Showdown-style EV (0-252, multiple of 4)."""
+    sp = max(0, min(CHAMPIONS_MAX_STAT_POINTS, sp))
+    raw_ev = sp / CHAMPIONS_MAX_STAT_POINTS * SHOWDOWN_MAX_EV_PER_STAT
+    ev = int(round(raw_ev / 4.0)) * 4
+    return max(0, min(SHOWDOWN_MAX_EV_PER_STAT, ev))
 
 # ---------- Profanity filter (hashed; no plain slurs) ----------
 # NOTE: replace/add with your project's approved SHA256 hashes of normalized tokens.
@@ -163,7 +191,13 @@ DEFAULT_SETTINGS = {
     "include_ribbons_if_none": True,
     "offline_mode": False,
     "immediate_ribbon_reload_on_url_change": True,
-    "use_profanity_filter": True
+    "use_profanity_filter": True,
+    # NEW: choose what kind of set file the generator produces.
+    # "showdown"  -> classic Pokémon Showdown export text (EVs/IVs as normal)
+    # "champions" -> Pokémon Champions export text (IVs forced to 31,
+    #                EVs replaced by Stat Points 0-66/stat, with a
+    #                reminder to verify current Champions availability)
+    "output_format": "showdown"
 }
 
 def load_or_create_settings() -> Dict:
@@ -335,57 +369,116 @@ def clamp_ev_distribution(evs: Dict[str,int]) -> Dict[str,int]:
     return evs
 
 # ---------- Transferable games list & generation detection ----------
+# This list intentionally covers every officially released Pokémon game,
+# remake, peripheral, and connectivity service across the franchise's
+# history, since any of them can be the "Current/Original game" of a
+# Pokémon being logged with this tool.
 TRANSFERABLE_GAMES = [
-    # Gen 1 (3DS VC)
+    # Gen 1 (and Poké Transporter GB homebrew route from original carts)
     "red", "green", "blue", "yellow",
-    # Gen 2 (3DS VC)
+    "pokémon stadium (japan)", "pokemon stadium (japan)",
+    "pokémon stadium (us)", "pokemon stadium (us)", "stadium",
+    "poké transporter gb", "poke transporter gb",
+    # Gen 2 (3DS VC AND original carts via Poké Transporter GB)
     "gold", "silver", "crystal",
+    "pokémon stadium 2", "pokemon stadium 2", "stadium 2",
     # Gen 3
     "ruby", "sapphire", "emerald",
-    "firered", "leafgreen",
-    "colosseum", "xd: gale of darkness", "colosseum bonus disc (us)", "colosseum bonus disc (jp)",
-    "pokémon box: ruby & sapphire", "pokemon box: ruby & sapphire",
+    "firered", "fire red", "leafgreen", "leaf green",
+    "colosseum", "xd: gale of darkness", "xd gale of darkness",
+    "colosseum bonus disc (us)", "colosseum bonus disc (jp)",
+    "pokémon box: ruby & sapphire", "pokemon box: ruby & sapphire", "pokemon box ruby and sapphire",
+    "pokémon channel", "pokemon channel", "pokémon channel (europe)", "pokémon channel (australia)",
+    "pokémon ranger", "pokemon ranger",
     # Gen 4
     "diamond", "pearl", "platinum",
-    "heartgold", "soulsilver", "battle revolution",
+    "pokéwalker", "pokewalker",
+    "heartgold", "heart gold", "soulsilver", "soul silver",
+    "pokémon ranger: shadows of almia", "pokemon ranger: shadows of almia",
+    "pokémon ranger: guardian signs", "pokemon ranger: guardian signs",
+    "my pokémon ranch", "my pokemon ranch",
+    "pokémon battle revolution", "pokemon battle revolution", "battle revolution",
     # Gen 5
     "black", "white", "black 2", "white 2",
+    "pokémon dream world", "pokemon dream world", "dream world",
+    "pokémon dream radar", "pokemon dream radar", "dream radar",
+    "pokémon bank", "pokemon bank",
     # Gen 6
-    "x", "y", "omega ruby", "alpha sapphire",
+    "x", "y",
+    "omega ruby & alpha sapphire special demo version", "oras special demo",
+    "omega ruby", "alpha sapphire",
     # Gen 7
-    "sun", "moon", "ultra sun", "ultra moon", "lets go: pikachu", "lets go: eevee", "let's go pikachu", "let's go eevee",
+    "sun & moon special demo version", "sun and moon special demo",
+    "sun", "moon",
+    "ultra sun & ultra moon special demo version", "usum special demo",
+    "ultra sun", "ultra moon",
+    "pokémon home", "pokemon home",
+    "pokéball plus", "pokeball plus", "poke ball plus",
+    "pokémon go", "pokemon go", "go",
+    "let's go, pikachu!", "lets go pikachu", "let's go: pikachu",
+    "let's go, eevee!", "lets go eevee", "let's go: eevee",
     # Gen 8
-    "sword", "shield", "legends: arceus",
+    "sword", "shield", "isle of armor", "crown tundra",
+    "brilliant diamond", "shining pearl",
+    "legends: arceus", "legends arceus", "pokémon legends: arceus", "pokemon legends arceus",
     # Gen 9
-    "scarlet", "violet", "legends: z-a",
-    # Hubs and services
-    "pokémon bank", "pokemon bank", "pokémon home", "pokemon home",
-    # NSO re-releases
-    "colosseum (nso)", "xd: gale of darkness (nso)"
+    "scarlet", "violet", "the teal mask", "the indigo disk",
+    "legends: z-a", "legends z-a", "legends za", "mega dimension",
 ]
 
-# mapping to generation number (best-effort)
+# mapping to generation number (best-effort, used only to decide which
+# generation-specific optional fields to prompt for)
 GAME_TO_GEN = {
-    # gen1 vc
+    # gen1
     "red":1,"green":1,"blue":1,"yellow":1,
-    # gen2 vc
+    "pokémon stadium (japan)":1,"pokemon stadium (japan)":1,
+    "pokémon stadium (us)":1,"pokemon stadium (us)":1,"stadium":1,
+    "poké transporter gb":1,"poke transporter gb":1,
+    # gen2
     "gold":2,"silver":2,"crystal":2,
+    "pokémon stadium 2":2,"pokemon stadium 2":2,"stadium 2":2,
     # gen3
-    "ruby":3,"sapphire":3,"emerald":3,"firered":3,"leafgreen":3,"pokémon box: ruby & sapphire":3,
-    "pokemon box: ruby & sapphire":3,
-    "colosseum":3,"xd: gale of darkness":3,
+    "ruby":3,"sapphire":3,"emerald":3,"firered":3,"fire red":3,"leafgreen":3,"leaf green":3,
+    "pokémon box: ruby & sapphire":3,"pokemon box: ruby & sapphire":3,"pokemon box ruby and sapphire":3,
+    "colosseum":3,"xd: gale of darkness":3,"xd gale of darkness":3,
+    "colosseum bonus disc (us)":3,"colosseum bonus disc (jp)":3,
+    "pokémon channel":3,"pokemon channel":3,
+    "pokémon channel (europe)":3,"pokémon channel (australia)":3,
+    "pokémon ranger":3,"pokemon ranger":3,
     # gen4
-    "diamond":4,"pearl":4,"platinum":4,"heartgold":4,"soulsilver":4,"battle revolution":4,
+    "diamond":4,"pearl":4,"platinum":4,
+    "pokéwalker":4,"pokewalker":4,
+    "heartgold":4,"heart gold":4,"soulsilver":4,"soul silver":4,
+    "pokémon ranger: shadows of almia":4,"pokemon ranger: shadows of almia":4,
+    "pokémon ranger: guardian signs":4,"pokemon ranger: guardian signs":4,
+    "my pokémon ranch":4,"my pokemon ranch":4,
+    "pokémon battle revolution":4,"pokemon battle revolution":4,"battle revolution":4,
     # gen5
     "black":5,"white":5,"black 2":5,"white 2":5,
+    "pokémon dream world":5,"pokemon dream world":5,"dream world":5,
+    "pokémon dream radar":5,"pokemon dream radar":5,"dream radar":5,
+    "pokémon bank":5,"pokemon bank":5,
     # gen6
-    "x":6,"y":6,"omega ruby":6,"alpha sapphire":6,
+    "x":6,"y":6,
+    "omega ruby & alpha sapphire special demo version":6,"oras special demo":6,
+    "omega ruby":6,"alpha sapphire":6,
     # gen7
-    "sun":7,"moon":7,"ultra sun":7,"ultra moon":7,"lets go: pikachu":7,"lets go: eevee":7,"let's go pikachu":7,"let's go eevee":7,
+    "sun & moon special demo version":7,"sun and moon special demo":7,
+    "sun":7,"moon":7,
+    "ultra sun & ultra moon special demo version":7,"usum special demo":7,
+    "ultra sun":7,"ultra moon":7,
+    "pokémon home":7,"pokemon home":7,
+    "pokéball plus":7,"pokeball plus":7,"poke ball plus":7,
+    "pokémon go":7,"pokemon go":7,"go":7,
+    "let's go, pikachu!":7,"lets go pikachu":7,"let's go: pikachu":7,
+    "let's go, eevee!":7,"lets go eevee":7,"let's go: eevee":7,
     # gen8
-    "sword":8,"shield":8,"legends: arceus":8,
+    "sword":8,"shield":8,"isle of armor":8,"crown tundra":8,
+    "brilliant diamond":8,"shining pearl":8,
+    "legends: arceus":8,"legends arceus":8,"pokémon legends: arceus":8,"pokemon legends arceus":8,
     # gen9
-    "scarlet":9,"violet":9,"legends: z-a":9
+    "scarlet":9,"violet":9,"the teal mask":9,"the indigo disk":9,
+    "legends: z-a":9,"legends z-a":9,"legends za":9,"mega dimension":9,
 }
 
 def get_generation_from_game(title: str) -> Optional[int]:
@@ -402,6 +495,10 @@ def get_generation_from_game(title: str) -> Optional[int]:
 def validate_original_game(title: str) -> bool:
     return title.strip().lower() in TRANSFERABLE_GAMES or any(k in title.strip().lower() for k in TRANSFERABLE_GAMES)
 
+def is_swsh_game(title: str) -> bool:
+    t = title.strip().lower()
+    return t in ("sword","shield","sw","sh","sword/shield","sword and shield") or "sword" in t or "shield" in t
+
 # ---------- Interactive settings menu (extended) ----------
 def settings_menu(settings: Dict, ribbons: Dict[str,List[str]]) -> Dict:
     while True:
@@ -415,6 +512,7 @@ def settings_menu(settings: Dict, ribbons: Dict[str,List[str]]) -> Dict:
         print(f"7. Offline mode: [{'✅' if settings.get('offline_mode') else '❌'}]")
         print(f"8. Immediate ribbon reload on URL change: [{'✅' if settings.get('immediate_ribbon_reload_on_url_change') else '❌'}]")
         print(f"9. Use profanity filter for free-form fields: [{'✅' if settings.get('use_profanity_filter') else '❌'}]")
+        print(f"10. Output format: [{settings.get('output_format')}]  (showdown / champions)")
         print(f"s. Save and return")
         print(f"x. Cancel and return")
         choice = input("Choose setting to edit (number/s/x): ").strip().lower()
@@ -467,6 +565,14 @@ def settings_menu(settings: Dict, ribbons: Dict[str,List[str]]) -> Dict:
         elif choice == '9':
             settings['use_profanity_filter'] = not settings.get('use_profanity_filter', True)
             print("Toggled.")
+        elif choice == '10':
+            cur = settings.get('output_format', 'showdown')
+            settings['output_format'] = 'champions' if cur == 'showdown' else 'showdown'
+            print(f"Output format set to '{settings['output_format']}'.")
+            if settings['output_format'] == 'champions':
+                print("Note: Champions sets will use 31 IVs across the board and Stat Points (0-66/stat)")
+                print("      instead of EVs. You'll still need to confirm the Pokémon/move/item/Ability")
+                print("      is currently available in Champions' rotating pool at the time you use it.")
         elif choice == 's':
             save_settings(settings)
             print("Settings saved.")
@@ -477,9 +583,364 @@ def settings_menu(settings: Dict, ribbons: Dict[str,List[str]]) -> Dict:
         else:
             print("Unknown option.")
 
+# ---------- Output builders (Showdown vs Champions) ----------
+def build_showdown_text(display_name, species_validated, item, ability, level, shiny, gender,
+                         nature, tera_type, gigantamax, dynamax_level, evs, ivs, default_iv,
+                         moves_list, cur_game, ot, trainer_id, gen, friendship_val, contest_vals,
+                         affection_val, memory_val, marks_entered, ribbons_entered, observed,
+                         want_infer, settings) -> str:
+    lines: List[str] = []
+    header = f"{display_name} ({species_validated})"
+    if item:
+        header += f" @ {item}"
+    lines.append(header)
+    if ability:
+        lines.append(f"Ability: {ability}")
+    lines.append(f"Level: {level}")
+    if shiny:
+        lines.append("Shiny: Yes")
+        lines.append("// Note: Shininess recorded. (All games support DVs leading to shininess; some titles do not show it visually.)")
+    if gender and gender.upper() in ("M","F"):
+        lines.append(f"Gender: {gender.upper()}")
+    if nature:
+        lines.append(f"{nature} Nature")
+    if tera_type:
+        lines.append(f"Tera Type: {tera_type}")
+    if gigantamax:
+        lines.append("Gigantamax: Yes")
+    if dynamax_level:
+        lines.append(f"Dynamax Level: {dynamax_level}")
+
+    ev_parts = []
+    for k in STAT_KEYS:
+        if evs.get(k,0) > 0:
+            ev_parts.append(f"{evs[k]} {STAT_DISPLAY[k]}")
+    if ev_parts:
+        lines.append("EVs: " + " / ".join(ev_parts))
+    iv_parts = []
+    for k in STAT_KEYS:
+        if ivs.get(k, default_iv) != default_iv:
+            iv_parts.append(f"{ivs[k]} {STAT_DISPLAY[k]}")
+    if iv_parts:
+        lines.append("IVs: " + " / ".join(iv_parts))
+
+    for mv in moves_list:
+        lines.append(f"- {mv}")
+
+    lines.append("")
+    lines.append(f"// Current Game: {cur_game if cur_game else 'Unknown'}")
+    if ot:
+        if trainer_id:
+            lines.append(f"// OT: {ot} (ID: {trainer_id})")
+        else:
+            lines.append(f"// OT: {ot}")
+    if gen:
+        lines.append(f"// Detected Generation: {gen}")
+    if friendship_val is not None:
+        lines.append(f"// Friendship: {friendship_val}")
+    if contest_vals:
+        contest_str = ", ".join([f"{k.capitalize()} {v}" for k, v in contest_vals.items() if v is not None])
+        if contest_str:
+            lines.append(f"// Contest: {contest_str}")
+    if affection_val is not None:
+        lines.append(f"// Affection: {affection_val}")
+    if memory_val:
+        lines.append(f"// Memory: {memory_val}")
+    if marks_entered:
+        lines.append(f"// Marks: {', '.join(marks_entered)}")
+    if ribbons_entered:
+        lines.append(f"// Ribbons: {', '.join(ribbons_entered)}")
+    else:
+        if settings.get("include_ribbons_if_none", True):
+            lines.append("// Ribbons: none")
+    if any(observed.values()):
+        obs_comments = ", ".join([f"{STAT_DISPLAY[k]} {observed[k]}" for k in STAT_KEYS if observed[k] is not None])
+        lines.append(f"// Observed stats: {obs_comments}")
+    lines.append(f"// EV assumption: IVs assumed {default_iv} where not derived" if not want_infer else f"// IVs/EVs inferred from observed stats")
+    return "\n".join(lines)
+
+def build_champions_text(display_name, species_validated, item, ability, level, shiny, gender,
+                          nature, tera_type, evs, moves_list, cur_game, ot, trainer_id,
+                          ribbons_entered, settings) -> str:
+    """
+    Champions has NO IVs (everything is fixed at 31) and NO EVs (replaced
+    by Stat Points, 0-66 per stat). It also draws from a small, rotating
+    pool of legal species/moves/items/Abilities, so we can't validate
+    availability here - we just flag that clearly for the user to check
+    at the time they actually use the set.
+    """
+    lines: List[str] = []
+    header = f"{display_name} ({species_validated})"
+    if item:
+        header += f" @ {item}"
+    lines.append(header)
+    if ability:
+        lines.append(f"Ability: {ability}")
+    lines.append(f"Level: {level}")
+    if shiny:
+        lines.append("Shiny: Yes")
+    if gender and gender.upper() in ("M","F"):
+        lines.append(f"Gender: {gender.upper()}")
+    if nature:
+        lines.append(f"{nature} Nature")
+    if tera_type:
+        lines.append(f"Tera Type: {tera_type}")
+
+    # IVs are always 31/31/31/31/31/31 in Champions - no line needed, but
+    # note it explicitly so nothing is ambiguous if read out of context.
+    lines.append(f"IVs: {CHAMPIONS_FIXED_IV} HP / {CHAMPIONS_FIXED_IV} Atk / {CHAMPIONS_FIXED_IV} Def / "
+                  f"{CHAMPIONS_FIXED_IV} SpA / {CHAMPIONS_FIXED_IV} SpD / {CHAMPIONS_FIXED_IV} Spe (fixed by Champions)")
+
+    sp_parts = []
+    for k in STAT_KEYS:
+        sp = ev_to_stat_points(evs.get(k, 0))
+        if sp > 0:
+            sp_parts.append(f"{sp} {STAT_DISPLAY[k]}")
+    if sp_parts:
+        lines.append("Stat Points: " + " / ".join(sp_parts))
+    else:
+        lines.append("Stat Points: (none allocated)")
+
+    for mv in moves_list:
+        lines.append(f"- {mv}")
+
+    lines.append("")
+    lines.append(f"// Originally from: {cur_game if cur_game else 'Unknown'}")
+    if ot:
+        if trainer_id:
+            lines.append(f"// OT: {ot} (ID: {trainer_id})")
+        else:
+            lines.append(f"// OT: {ot}")
+    if ribbons_entered:
+        lines.append(f"// Ribbons/Marks (informational only, Champions does not track these): {', '.join(ribbons_entered)}")
+    lines.append("// ⚠️ IMPORTANT: Pokémon Champions uses a small, rotating VGC-style pool of legal")
+    lines.append("//    species, moves, Abilities, held items, and Tera Types. Please verify in-game")
+    lines.append("//    (or via the current Champions rules page) that this Pokémon, its moves, its")
+    lines.append("//    Ability, and its held item are all currently usable before relying on this set.")
+    lines.append("// ⚠️ If this Pokémon is stuck in a HOME Premium Box (Basic Plan), you can still use")
+    lines.append("//    this set once it's brought into Champions via HOME's existing compatibility -")
+    lines.append("//    you do not need a Premium Plan for Champions to read it.")
+    return "\n".join(lines)
+
+# ---------- Showdown <-> Champions text parsing & conversion ----------
+SHOWDOWN_HEADER_RE = re.compile(r"^(?P<rest>.+?)(?:\s*@\s*(?P<item>.+))?$")
+EV_LINE_RE = re.compile(r"^EVs:\s*(.+)$", re.IGNORECASE)
+IV_LINE_RE = re.compile(r"^IVs:\s*(.+)$", re.IGNORECASE)
+SP_LINE_RE = re.compile(r"^Stat Points:\s*(.+)$", re.IGNORECASE)
+ABILITY_LINE_RE = re.compile(r"^Ability:\s*(.+)$", re.IGNORECASE)
+LEVEL_LINE_RE = re.compile(r"^Level:\s*(\d+)$", re.IGNORECASE)
+NATURE_LINE_RE = re.compile(r"^(\w+)\s+Nature$", re.IGNORECASE)
+SHINY_LINE_RE = re.compile(r"^Shiny:\s*Yes$", re.IGNORECASE)
+GENDER_LINE_RE = re.compile(r"^Gender:\s*([MF])$", re.IGNORECASE)
+TERA_LINE_RE = re.compile(r"^Tera Type:\s*(.+)$", re.IGNORECASE)
+MOVE_LINE_RE = re.compile(r"^-\s*(.+)$")
+
+REV_STAT_DISPLAY = {v.lower(): k for k, v in STAT_DISPLAY.items()}
+
+def parse_stat_block(block: str) -> Dict[str, int]:
+    """Parses 'X HP / Y Atk / Z Def ...' style blocks into a stat dict."""
+    out = {k: 0 for k in STAT_KEYS}
+    parts = [p.strip() for p in block.split("/")]
+    for p in parts:
+        m = re.match(r"^(\d+)\s+(\w+)", p)
+        if m:
+            val = int(m.group(1))
+            label = m.group(2).strip().lower()
+            key = REV_STAT_DISPLAY.get(label)
+            if key:
+                out[key] = val
+    return out
+
+def parse_set_text(text: str) -> Dict:
+    """Best-effort parser for either a Showdown-format or Champions-format
+    set produced by this tool (or a standard Showdown export pasted in)."""
+    lines = [l.rstrip() for l in text.splitlines() if l.strip() != ""]
+    if not lines:
+        raise ValueError("No content to parse.")
+
+    data: Dict = {
+        "display_name": "", "species": "", "item": "", "ability": "",
+        "level": 100, "shiny": False, "gender": "", "nature": "",
+        "tera_type": "", "evs": {k: 0 for k in STAT_KEYS},
+        "ivs": {k: 31 for k in STAT_KEYS},
+        "stat_points": {k: 0 for k in STAT_KEYS},
+        "moves": [], "cur_game": "", "ot": "", "trainer_id": "",
+        "ribbons": [], "is_champions_format": False
+    }
+
+    header = lines[0]
+    item = ""
+    rest = header
+    if "@" in header:
+        rest, item = header.split("@", 1)
+        item = item.strip()
+    rest = rest.strip()
+    species = rest
+    display_name = rest
+    m = re.match(r"^(?P<nick>.+?)\s*\((?P<species>.+)\)$", rest)
+    if m:
+        display_name = m.group("nick").strip()
+        species = m.group("species").strip()
+    data["display_name"] = display_name
+    data["species"] = species
+    data["item"] = item
+
+    for line in lines[1:]:
+        m = ABILITY_LINE_RE.match(line)
+        if m:
+            data["ability"] = m.group(1).strip(); continue
+        m = LEVEL_LINE_RE.match(line)
+        if m:
+            data["level"] = int(m.group(1)); continue
+        m = NATURE_LINE_RE.match(line)
+        if m and m.group(1).title() in FALLBACK_NATURES:
+            data["nature"] = m.group(1).title(); continue
+        if SHINY_LINE_RE.match(line):
+            data["shiny"] = True; continue
+        m = GENDER_LINE_RE.match(line)
+        if m:
+            data["gender"] = m.group(1).upper(); continue
+        m = TERA_LINE_RE.match(line)
+        if m:
+            data["tera_type"] = m.group(1).strip(); continue
+        m = EV_LINE_RE.match(line)
+        if m:
+            data["evs"].update(parse_stat_block(m.group(1))); continue
+        m = IV_LINE_RE.match(line)
+        if m:
+            # could be a normal Showdown IV line, or our Champions
+            # "fixed by Champions" line - either way, parse what we can
+            data["ivs"].update(parse_stat_block(m.group(1)))
+            if "champions" in line.lower():
+                data["is_champions_format"] = True
+            continue
+        m = SP_LINE_RE.match(line)
+        if m:
+            data["is_champions_format"] = True
+            data["stat_points"].update(parse_stat_block(m.group(1)))
+            continue
+        m = MOVE_LINE_RE.match(line)
+        if m:
+            data["moves"].append(m.group(1).strip()); continue
+        if line.strip().startswith("//"):
+            c = line.strip().lstrip("/").strip()
+            if c.lower().startswith("current game:"):
+                data["cur_game"] = c.split(":",1)[1].strip()
+            elif c.lower().startswith("originally from:"):
+                data["cur_game"] = c.split(":",1)[1].strip()
+                data["is_champions_format"] = True
+            elif c.lower().startswith("ot:"):
+                rest_c = c.split(":",1)[1].strip()
+                idm = re.match(r"^(?P<ot>.+?)\s*\(ID:\s*(?P<id>.+?)\)$", rest_c)
+                if idm:
+                    data["ot"] = idm.group("ot").strip()
+                    data["trainer_id"] = idm.group("id").strip()
+                else:
+                    data["ot"] = rest_c
+            elif c.lower().startswith("ribbons:"):
+                rv = c.split(":",1)[1].strip()
+                if rv.lower() != "none":
+                    data["ribbons"] = [r.strip() for r in rv.split(",") if r.strip()]
+            continue
+    return data
+
+def convert_showdown_to_champions_text(text: str, settings: Dict) -> str:
+    data = parse_set_text(text)
+    if data.get("is_champions_format"):
+        print("⚠️ This looks like it might already be a Champions-format set. Converting anyway.")
+    if any(v != 31 for v in data["ivs"].values()):
+        print("⚠️ Note: Champions forces all IVs to 31. Any non-31 IVs in the source set will be lost/overwritten.")
+    text_out = build_champions_text(
+        display_name=data["display_name"], species_validated=data["species"], item=data["item"],
+        ability=data["ability"], level=data["level"], shiny=data["shiny"], gender=data["gender"],
+        nature=data["nature"], tera_type=data["tera_type"], evs=data["evs"], moves_list=data["moves"],
+        cur_game=data["cur_game"], ot=data["ot"], trainer_id=data["trainer_id"],
+        ribbons_entered=data["ribbons"], settings=settings
+    )
+    return text_out
+
+def convert_champions_to_showdown_text(text: str, settings: Dict) -> str:
+    data = parse_set_text(text)
+    # Reconstruct EVs from Stat Points if present; otherwise assume the
+    # "evs" dict was already populated (e.g. if fed a hybrid/edited file).
+    evs = {k: stat_points_to_ev(v) for k, v in data["stat_points"].items()} if any(data["stat_points"].values()) else data["evs"]
+    ivs = {k: 31 for k in STAT_KEYS}  # Champions-origin sets are always 31 IVs
+    default_iv = settings.get('default_iv_value', 31)
+    text_out = build_showdown_text(
+        display_name=data["display_name"], species_validated=data["species"], item=data["item"],
+        ability=data["ability"], level=data["level"], shiny=data["shiny"], gender=data["gender"],
+        nature=data["nature"], tera_type=data["tera_type"], gigantamax=False, dynamax_level="",
+        evs=evs, ivs=ivs, default_iv=default_iv, moves_list=data["moves"], cur_game=data["cur_game"],
+        ot=data["ot"], trainer_id=data["trainer_id"], gen=None, friendship_val=None, contest_vals={},
+        affection_val=None, memory_val="", marks_entered=[], ribbons_entered=data["ribbons"],
+        observed={k: None for k in STAT_KEYS}, want_infer=False, settings=settings
+    )
+    text_out += "\n// Note: this set originated from a Pokémon Champions export. IVs were forced" \
+                "\n//       to 31 by Champions, and EVs were reverse-derived from Stat Points using" \
+                f"\n//       a {CHAMPIONS_MAX_STAT_POINTS}-Stat-Point-to-{SHOWDOWN_MAX_EV_PER_STAT}-EV scale; double check before competitive use."
+    return text_out
+
+def run_conversion_menu(settings: Dict, direction: str):
+    """direction: 'to_champions' or 'to_showdown'"""
+    print("\nPaste the path to an existing set .txt file, or paste the set text directly")
+    print("and finish with a single line containing only: END")
+    src = ask("File path (leave blank to paste text instead)", optional=True)
+    text = ""
+    if src.strip():
+        path = src.strip()
+        if not os.path.isabs(path):
+            path = os.path.join(SCRIPT_DIR, path)
+        if not os.path.exists(path):
+            print(f"⚠️ File not found: {path}")
+            return
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+    else:
+        print("Paste the set now, then type END on its own line:")
+        buf = []
+        while True:
+            line = input()
+            if line.strip() == "END":
+                break
+            buf.append(line)
+        text = "\n".join(buf)
+
+    if not text.strip():
+        print("Nothing to convert.")
+        return
+
+    try:
+        if direction == "to_champions":
+            converted = convert_showdown_to_champions_text(text, settings)
+            suffix = "Champions_Converted"
+        else:
+            converted = convert_champions_to_showdown_text(text, settings)
+            suffix = "Showdown_Converted"
+    except Exception as e:
+        print(f"⚠️ Could not parse/convert that set: {e}")
+        return
+
+    print(f"\n=== Converted Set ({'Pokémon Champions' if direction=='to_champions' else 'Pokémon Showdown'}) ===")
+    print(converted)
+
+    try:
+        first_line = converted.splitlines()[0]
+        name_guess = re.sub(r"[^A-Za-z0-9 _-]", "", first_line.split("@")[0]).strip() or "Converted_Set"
+    except Exception:
+        name_guess = "Converted_Set"
+    filename = f"{name_guess}_{suffix}.txt"
+    filepath = os.path.abspath(os.path.join(SCRIPT_DIR, filename))
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(converted)
+        print(f"\n✅ Converted set saved as: {filepath}")
+    except Exception as e:
+        print("Error saving converted file:", e)
+
 # ---------- Main generator (enhanced prompts per generation) ----------
 def generate_set(settings: Dict, ribbons: Dict[str,List[str]], pokedex: Dict, moves_db: Dict, abilities_db: Dict, items_db: Dict):
-    print("\n=== Pokémon Showdown Set Generator ===\n")
+    output_format = settings.get("output_format", "showdown")
+    print(f"\n=== Pokémon Set Generator (output format: {output_format}) ===\n")
     autocorrect_mode = get_autocorrect_mode(settings)
 
     # Species
@@ -540,6 +1001,24 @@ def generate_set(settings: Dict, ribbons: Dict[str,List[str]], pokedex: Dict, mo
                         except:
                             print("Enter an integer.")
 
+    # ---- Current game / generation detection ASAP ----
+    # Moved up so that every generation-gated question below (Tera Type,
+    # Dynamax Level, Gigantamax, Friendship, Contest stats, Affection/Memory,
+    # Marks) only gets asked when it's actually relevant to this Pokémon.
+    print("\nLet's figure out which game this Pokémon is currently in first, so we only")
+    print("ask about the fields that actually apply to it.")
+    cur_game = safe_ask("Current game", optional=True, settings=settings)
+    gen = get_generation_from_game(cur_game) if cur_game else None
+    if cur_game and not validate_original_game(cur_game):
+        print("⚠️ Note: The original/current game entered is not in the transferable-games list. This may affect legality.")
+    if cur_game and gen:
+        print(f"Detected generation: {gen}")
+    else:
+        if cur_game:
+            print("Could not detect generation automatically; generation-specific fields will be optional.")
+        else:
+            print("No game entered; generation-specific fields will be optional.")
+
     # Basic fields (use safe_ask for free-form when enabled)
     nickname = safe_ask("Nickname (leave blank if none)", optional=True, settings=settings)
     shiny = yes_no("Is it shiny?", default=False)
@@ -555,25 +1034,28 @@ def generate_set(settings: Dict, ribbons: Dict[str,List[str]], pokedex: Dict, mo
     if ability_input and abilities_db:
         ability = validate_input(ability_input, [k for k in abilities_db.keys()], autocorrect_mode, label="Ability")
 
-    tera_input = ask("Tera type (SV) (optional)", optional=True)
+    # Tera type only applies from Gen 9 (Scarlet/Violet) onward
     tera_type = ""
-    if tera_input:
-        tera_type = validate_input(tera_input, FALLBACK_TYPES, autocorrect_mode, label="Tera Type")
+    if gen is not None and gen >= 9:
+        tera_input = ask("Tera type (SV) (optional)", optional=True)
+        if tera_input:
+            tera_type = validate_input(tera_input, FALLBACK_TYPES, autocorrect_mode, label="Tera Type")
+    elif gen is None:
+        # Unknown game - ask but make it clearly optional/conditional
+        tera_input = ask("Tera type (only applies if this is a Gen 9 / Scarlet & Violet Pokémon; leave blank otherwise)", optional=True)
+        if tera_input:
+            tera_type = validate_input(tera_input, FALLBACK_TYPES, autocorrect_mode, label="Tera Type")
 
-    dynamax_level = ask("Dynamax Level (SwSh only) (optional)", optional=True)
+    # Dynamax Level / Gigantamax only apply to Sword/Shield (Gen 8, SwSh specifically)
+    dynamax_level = ""
     gigantamax = False
-    cur_game = safe_ask("Current game (optional, used to enable GMax prompt)", optional=True, settings=settings)
-    gen = get_generation_from_game(cur_game) if cur_game else None
-    if cur_game and not validate_original_game(cur_game):
-        print("⚠️ Note: The original/current game entered is not in the transferable-games list. This may affect legality.")
-    if cur_game and gen:
-        print(f"Detected generation: {gen}")
-    else:
-        if cur_game:
-            print("Could not detect generation automatically; generation-specific fields will be optional.")
-
-    if cur_game and cur_game.strip().lower() in ("sword","shield","sw","sh","sword/shield"):
+    if cur_game and is_swsh_game(cur_game):
+        dynamax_level = ask("Dynamax Level (SwSh only) (optional)", optional=True)
         gigantamax = yes_no("Has Gigantamax factor?", default=False)
+    elif gen is None:
+        dynamax_level = ask("Dynamax Level (only applies if this is a Sword/Shield Pokémon; leave blank otherwise)", optional=True)
+        if dynamax_level.strip():
+            gigantamax = yes_no("Has Gigantamax factor?", default=False)
 
     # Observed stats
     print("\nEnter observed stats you can see in the game (leave blank if unknown). We'll use these to infer EVs/IVs.")
@@ -780,96 +1262,44 @@ def generate_set(settings: Dict, ribbons: Dict[str,List[str]], pokedex: Dict, mo
             ribbons_entered.append(rr)
             print(f"Added ribbon: {rr}")
 
-    # Prepare output lines
+    # Prepare output
     display_name = nickname if nickname else species_validated
     filename_safe = "".join(c for c in display_name if c.isalnum() or c in (' ', '-', '_')).rstrip()
-    lines: List[str] = []
-    header = f"{display_name} ({species_validated})"
-    if item:
-        header += f" @ {item}"
-    lines.append(header)
-    if ability:
-        lines.append(f"Ability: {ability}")
-    lines.append(f"Level: {level}")
-    if shiny:
-        lines.append("Shiny: Yes")
-        # note: all gens support shininess existence; older gens may not display it
-        lines.append("// Note: Shininess recorded. (All games support DVs leading to shininess; some titles do not show it visually.)")
-    if gender and gender.upper() in ("M","F"):
-        lines.append(f"Gender: {gender.upper()}")
-    if nature:
-        lines.append(f"{nature} Nature")
-    if tera_type:
-        lines.append(f"Tera Type: {tera_type}")
-    if gigantamax:
-        lines.append("Gigantamax: Yes")
-    if dynamax_level:
-        lines.append(f"Dynamax Level: {dynamax_level}")
-
-    # EVs / IVs
     default_iv = settings.get('default_iv_value',31)
-    ev_parts = []
-    for k in STAT_KEYS:
-        if evs.get(k,0) > 0:
-            ev_parts.append(f"{evs[k]} {STAT_DISPLAY[k]}")
-    if ev_parts:
-        lines.append("EVs: " + " / ".join(ev_parts))
-    iv_parts = []
-    for k in STAT_KEYS:
-        if ivs.get(k, default_iv) != default_iv:
-            iv_parts.append(f"{ivs[k]} {STAT_DISPLAY[k]}")
-    if iv_parts:
-        lines.append("IVs: " + " / ".join(iv_parts))
 
-    # Moves
-    for mv in moves_list:
-        lines.append(f"- {mv}")
-
-    # Metadata
-    lines.append("")
-    lines.append(f"// Current Game: {cur_game if cur_game else 'Unknown'}")
-    if ot:
-        if trainer_id:
-            lines.append(f"// OT: {ot} (ID: {trainer_id})")
-        else:
-            lines.append(f"// OT: {ot}")
-    if gen:
-        lines.append(f"// Detected Generation: {gen}")
-    if friendship_val is not None:
-        lines.append(f"// Friendship: {friendship_val}")
-    if contest_vals:
-        contest_str = ", ".join([f"{k.capitalize()} {v}" for k, v in contest_vals.items() if v is not None])
-        if contest_str:
-            lines.append(f"// Contest: {contest_str}")
-    if affection_val is not None:
-        lines.append(f"// Affection: {affection_val}")
-    if memory_val:
-        lines.append(f"// Memory: {memory_val}")
-    if marks_entered:
-        lines.append(f"// Marks: {', '.join(marks_entered)}")
-    if ribbons_entered:
-        lines.append(f"// Ribbons: {', '.join(ribbons_entered)}")
+    if output_format == "champions":
+        out_text = build_champions_text(
+            display_name=display_name, species_validated=species_validated, item=item, ability=ability,
+            level=level, shiny=shiny, gender=gender, nature=nature, tera_type=tera_type, evs=evs,
+            moves_list=moves_list, cur_game=cur_game, ot=ot, trainer_id=trainer_id,
+            ribbons_entered=ribbons_entered, settings=settings
+        )
+        filename = f"{filename_safe}_Champions_Set.txt"
+        header_label = "Pokémon Champions Set"
     else:
-        if settings.get("include_ribbons_if_none", True):
-            lines.append("// Ribbons: none")
-    if any(observed.values()):
-        obs_comments = ", ".join([f"{STAT_DISPLAY[k]} {observed[k]}" for k in STAT_KEYS if observed[k] is not None])
-        lines.append(f"// Observed stats: {obs_comments}")
-    lines.append(f"// EV assumption: IVs assumed {default_iv} where not derived" if not want_infer else f"// IVs/EVs inferred from observed stats")
+        out_text = build_showdown_text(
+            display_name=display_name, species_validated=species_validated, item=item, ability=ability,
+            level=level, shiny=shiny, gender=gender, nature=nature, tera_type=tera_type,
+            gigantamax=gigantamax, dynamax_level=dynamax_level, evs=evs, ivs=ivs, default_iv=default_iv,
+            moves_list=moves_list, cur_game=cur_game, ot=ot, trainer_id=trainer_id, gen=gen,
+            friendship_val=friendship_val, contest_vals=contest_vals, affection_val=affection_val,
+            memory_val=memory_val, marks_entered=marks_entered, ribbons_entered=ribbons_entered,
+            observed=observed, want_infer=want_infer, settings=settings
+        )
+        filename = f"{filename_safe}_Showdown_Set.txt"
+        header_label = "Pokémon Showdown Set"
 
-    showdown_text = "\n".join(lines)
-    filename = f"{filename_safe}_Showdown_Set.txt"
     filepath = os.path.abspath(os.path.join(SCRIPT_DIR, filename))
     try:
         with open(filepath, "w", encoding="utf-8") as f:
-            f.write(showdown_text)
-        print("\n=== Pokémon Showdown Set ===")
-        print(showdown_text)
+            f.write(out_text)
+        print(f"\n=== {header_label} ===")
+        print(out_text)
         print(f"\n✅ Set saved as: {filepath}")
     except Exception as e:
         print("Error saving file:", e)
-        print("\n=== Pokémon Showdown Set (preview) ===")
-        print(showdown_text)
+        print(f"\n=== {header_label} (preview) ===")
+        print(out_text)
 
 # ---------- Main program flow ----------
 def main():
@@ -878,10 +1308,12 @@ def main():
     pokedex, moves_db, abilities_db, items_db = load_showdown_resources(settings)
     while True:
         print("\n=== Main Menu ===")
-        print("1) Generate Pokémon Showdown set")
+        print(f"1) Generate Pokémon set (current output format: {settings.get('output_format','showdown')})")
         print("2) Settings")
         print("3) Update ribbons now")
-        print("4) Exit")
+        print("4) Convert a Showdown set -> Pokémon Champions format")
+        print("5) Convert a Pokémon Champions set -> Showdown format")
+        print("6) Exit")
         choice = input("Choose an option: ").strip()
         if choice == '1':
             generate_set(settings, ribbons, pokedex, moves_db, abilities_db, items_db)
@@ -905,10 +1337,14 @@ def main():
                 else:
                     print("⚠️ Could not download ribbons.json.")
         elif choice == '4':
+            run_conversion_menu(settings, "to_champions")
+        elif choice == '5':
+            run_conversion_menu(settings, "to_showdown")
+        elif choice == '6':
             print("Goodbye.")
             return
         else:
-            print("Unknown option. Enter 1-4.")
+            print("Unknown option. Enter 1-6.")
 
 if __name__ == "__main__":
     try:
